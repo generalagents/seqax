@@ -47,26 +47,26 @@ def generate_text_tokens(
 @jaxtyped(typechecker=typechecker)
 def generate_image(
     size: tuple[int, int], gen: np.random.Generator
-) -> UInt32[np.ndarray, "..."]:
+) -> Float[np.ndarray, "..."]:
     """Generates a random image of a given size.
 
     Returns:
         np.ndarray: A random image of the given size.
     """
-    img_array = gen.integers(0, 256, size=size, dtype=np.uint32)
-    return img_array
+    img_array = gen.integers(0, 256, size=size)
+    return img_array.astype(np.float32)
 
 
 @jaxtyped(typechecker=typechecker)
 def generate_patches(
     image: np.ndarray, patch_size: tuple[int, int]
-) -> UInt32[np.ndarray, "..."]:
+) -> Float[np.ndarray, "..."]:
     """
     Takes an image and returns patches of the image.
     """
     patches = view_as_blocks(image, block_shape=patch_size)
     patches = patches.reshape(-1, patch_size[0] * patch_size[1])
-    return patches
+    return patches.astype(np.float32)
 
 
 @jaxtyped(typechecker=typechecker)
@@ -123,11 +123,11 @@ def synthetic_task(config: Config, gen: np.random.Generator) -> image_flat_token
         for _ in range(num_images_per_doc):
             image = generate_image(image_size, gen)
             patches = generate_patches(image, patch_size)
-            all_image_patches_per_doc.append(patches.flatten())
-        all_image_patches_per_doc = np.vstack(
+            all_image_patches_per_doc.append(patches)
+
+        all_image_patches.append(
             all_image_patches_per_doc
-        )  # (num_images_per_doc , patch_size[0] * patch_size[1])
-        all_image_patches.append(all_image_patches_per_doc)
+        )  # (num_docs, num_images_per_doc , patch_size[0], patch_size[1])
 
         # interleave the text and image tokens
         image_tokens = np.arange(

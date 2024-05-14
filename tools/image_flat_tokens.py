@@ -24,9 +24,9 @@ class Config:
 class Chunk:
     """An in-memory encoding of flat tokens. Use this as a buffer for writing to a FlatTokensWriter."""
 
-    image_values: (
+    patch_values: (
         np.ndarray
-    )  # uint32[num_tokens] - this array keeps track of the image patches. Start and end of the image patches are determined by the patch size.
+    )  # float[num_images patch_size patch_size] - this array keeps track of the image patches.
     encoded_tokens: (
         np.ndarray
     )  # uint32[num_tokens] - this array keeps track of the text in the document
@@ -44,7 +44,7 @@ class Chunk:
 
     @staticmethod
     def from_ragged(
-        image_values: list[np.ndarray],
+        patch_values: list[np.ndarray],
         text_tokens: list[np.ndarray],
         doc_tokens: list[np.ndarray],
         max_text_token_id: int,
@@ -54,7 +54,7 @@ class Chunk:
         """
         Convert a list of sequences (document tokens) to a FlatTokensChunk.
 
-        - image_values: will be all the values = these can't be of different lengths. they will depend on patch size. [num_images, patch_size[0] * patch_size[1]]
+        - patch_values: will be all the values = these can't be of different lengths. they will depend on patch size. [num_images, patch_size[0] * patch_size[1]]
         - doc_tokens: can be of varying lengths. [num_docs, num_tokens]
 
         # TODO: consider if text tokens is a redundancy.
@@ -73,7 +73,7 @@ class Chunk:
         ] |= 1  # this ensures that the start of the sequence is marked.
 
         return Chunk(
-            image_values=np.vstack(image_values).flatten(),
+            patch_values=np.array(patch_values, dtype=np.float32),
             encoded_tokens=np.concatenate(text_tokens),
             document_tokens=document_tokens,
             seq_starts=seq_starts,
@@ -122,14 +122,14 @@ class Writer:
                 filters=filters,
             )
 
-        if "image_values" in self.group:
-            self.image_values = self.group["image_values"]
+        if "patch_values" in self.group:
+            self.patch_values = self.group["patch_values"]
         else:
-            self.image_values = self.group.empty(
-                "image_values",
+            self.patch_values = self.group.empty(
+                "patch_values",
                 shape=(0,),
                 chunks=(config.image_chunk_size,),
-                dtype=np.uint32,
+                dtype=np.float32,
                 compressor=compressor,
             )
 
@@ -166,5 +166,5 @@ class Writer:
             executor.submit(
                 lambda: self.seq_starts.append(num_tokens + chunk.seq_starts[1:])
             )
-            executor.submit(lambda: self.image_values.append(chunk.image_values))
+            executor.submit(lambda: self.patch_values.append(chunk.patch_values))
             executor.submit(lambda: self.document_tokens.append(chunk.document_tokens))
