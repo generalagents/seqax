@@ -1,6 +1,7 @@
 # Hydra
 outputs/
 
+*.zarr
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
