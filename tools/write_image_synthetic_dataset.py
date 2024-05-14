@@ -1,7 +1,7 @@
 # To run:
 #
 # ```
-# python write_image_synthetic_dataset.py --config-name=image_synthetic_dataset +output=synthetic_dataset.npz
+# python write_image_synthetic_dataset.py --config-name=image_synthetic_dataset +output=synthetic_image_dataset.zarr
 # ```
 #
 # Synthetic tasks: see Section 4 of https://arxiv.org/abs/2002.09402 for some ideas.
@@ -160,18 +160,18 @@ def main(config):
     config = hydra.utils.instantiate(config)
     gen = np.random.Generator(np.random.PCG64(config.seed))
 
-    # for split, mode in [
-    #     (image_flat_tokens.Split.VALIDATION, "w-"),
-    #     (image_flat_tokens.Split.TRAIN, "r+"),
-    # ]:
-    #     dst = image_flat_tokens.Writer(
-    #         config.output, split, mode, config.image_flat_tokens_config
-    #     )
-    examples_chunk = synthetic_task(config, gen)
-    print(examples_chunk)
-    # save to numpy
-    np.savez(config.output, examples_chunk)
-    # dst.write(examples_chunk)
+    for split, mode in [
+        (image_flat_tokens.Split.VALIDATION, "w-"),
+        (image_flat_tokens.Split.TRAIN, "r+"),
+    ]:
+        dst = image_flat_tokens.Writer(
+            config.output, split, mode, config.flat_tokens_config
+        )
+        examples_chunk = synthetic_task(config, gen)
+        print(examples_chunk)
+        # save to numpy
+        # np.savez(config.output, examples_chunk)
+        dst.write(examples_chunk)
 
 
 if __name__ == "__main__":

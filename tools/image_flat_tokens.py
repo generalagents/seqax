@@ -1,8 +1,9 @@
-from dataclasses import dataclass
-import enum
-import zarr
-import numpy as np
 import concurrent
+import enum
+from dataclasses import dataclass
+
+import numpy as np
+import zarr
 from numcodecs import Blosc, Delta
 
 
@@ -15,10 +16,8 @@ class Split(enum.Enum):
 class Config:
     tokens_chunk_size: int
     seq_starts_chunk_size: int
+    image_chunk_size: int
     _target_: str = __name__ + ".Config"
-
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -54,10 +53,10 @@ class Chunk:
     ):
         """
         Convert a list of sequences (document tokens) to a FlatTokensChunk.
-        
+
         - image_values: will be all the values = these can't be of different lengths. they will depend on patch size. [num_images, patch_size[0] * patch_size[1]]
         - doc_tokens: can be of varying lengths. [num_docs, num_tokens]
-        
+
         # TODO: consider if text tokens is a redundancy.
         """
         document_tokens = np.concatenate(doc_tokens)
@@ -85,12 +84,12 @@ class Chunk:
 
 
 class Writer:
-    def __init__(self, filespec: str, split: Split, mode: str, config: Config):
+    def __init__(self, filespec: str, split: str, mode: str, config):
         try:
             dst_root = zarr.open_group(filespec, mode=mode, cache_attrs=True)
         except zarr.errors.ContainsGroupError:
             raise ValueError(f"Output {filespec} already exists.")
-        self.group = dst_root.require_group(split.value)
+        self.group = dst_root.require_group(split)
 
         # Use BITSHUFFLE for encoded_tokens, since the token IDs will typically only be ~14-17 bits wide.
         compressor = Blosc(cname="lz4", clevel=5, shuffle=Blosc.BITSHUFFLE)
@@ -123,6 +122,28 @@ class Writer:
                 filters=filters,
             )
 
+        if "image_values" in self.group:
+            self.image_values = self.group["image_values"]
+        else:
+            self.image_values = self.group.empty(
+                "image_values",
+                shape=(0,),
+                chunks=(config.image_chunk_size,),
+                dtype=np.uint32,
+                compressor=compressor,
+            )
+
+        if "document_tokens" in self.group:
+            self.document_tokens = self.group["document_tokens"]
+        else:
+            self.document_tokens = self.group.empty(
+                "document_tokens",
+                shape=(0,),
+                chunks=(config.tokens_chunk_size,),
+                dtype=np.uint32,
+                compressor=compressor,
+            )
+
     def write(self, chunk: Chunk):
         """Synchronously writes a chunk of flat tokens to the underlying storage.
 
@@ -132,11 +153,16 @@ class Writer:
         You typically want to call this in a separate thread, to overlap computation with I/O.
         """
         num_tokens = self.encoded_tokens.shape[0]
-        if chunk.max_token_id > self.group.attrs["max_token_id"]:
-            self.group.attrs["max_token_id"] = chunk.max_token_id
+        if chunk.max_text_token_id > self.group.attrs["max_token_id"]:
+            self.group.attrs["max_token_id"] = chunk.max_text_token_id
+        if chunk.max_image_token_id > self.group.attrs["max_token_id"]:
+            self.group.attrs["max_token_id"] = chunk.max_image_token_id
+
         # In parallel:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             executor.submit(lambda: self.encoded_tokens.append(chunk.encoded_tokens))
             executor.submit(
                 lambda: self.seq_starts.append(num_tokens + chunk.seq_starts[1:])
             )
+            executor.submit(lambda: self.image_values.append(chunk.image_values))
+            executor.submit(lambda: self.document_tokens.append(chunk.document_tokens))
