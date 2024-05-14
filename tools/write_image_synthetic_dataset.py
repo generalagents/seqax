@@ -1,7 +1,7 @@
 # To run:
 #
 # ```
-# python write_image_synthetic_dataset.py --config-name=image_synthetic_dataset +output=synthetic_dataset.zarr
+# python write_image_synthetic_dataset.py --config-name=image_synthetic_dataset +output=synthetic_dataset.npz
 # ```
 #
 # Synthetic tasks: see Section 4 of https://arxiv.org/abs/2002.09402 for some ideas.
@@ -47,7 +47,7 @@ def generate_text_tokens(
 @jaxtyped(typechecker=typechecker)
 def generate_image(
     size: tuple[int, int], gen: np.random.Generator
-) -> UInt32[Array, "{size}"]:
+) -> UInt32[np.ndarray, "..."]:
     """Generates a random image of a given size.
 
     Returns:
@@ -60,7 +60,7 @@ def generate_image(
 @jaxtyped(typechecker=typechecker)
 def generate_patches(
     image: np.ndarray, patch_size: tuple[int, int]
-) -> UInt32[np.ndarray, "-1 (h * w)"]:
+) -> UInt32[np.ndarray, "..."]:
     """
     Takes an image and returns patches of the image.
     """
@@ -95,9 +95,7 @@ def interleave_tokens(
 
 
 @jaxtyped(typechecker=typechecker)
-def synthetic_task(
-    config: Config, gen: np.random.Generator
-) -> list[UInt32[np.ndarray, "..."]]:
+def synthetic_task(config: Config, gen: np.random.Generator) -> image_flat_tokens.Chunk:
     num_text_tokens_per_doc = config.seq_len - 1
     num_docs = config.examples
     num_images_per_doc = config.images_per_example
