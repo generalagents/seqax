@@ -157,6 +157,8 @@ class Writer:
             self.group.attrs["max_token_id"] = chunk.max_text_token_id
         if chunk.max_image_token_id > self.group.attrs["max_token_id"]:
             self.group.attrs["max_token_id"] = chunk.max_image_token_id
+        if "patch_size" not in self.group.attrs:
+            self.group.attrs["patch_size"] = chunk.patch_size
 
         # In parallel:
         with concurrent.futures.ThreadPoolExecutor() as executor:
