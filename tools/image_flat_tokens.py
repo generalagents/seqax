@@ -66,17 +66,11 @@ class Chunk:
             seq_starts != len(document_tokens), seq_starts, 0
         )
 
-        # document tokens will need to be multiplied by 2.
-        document_tokens <<= 1
-        document_tokens[
-            in_bounds_seq_starts
-        ] |= 1  # this ensures that the start of the sequence is marked.
-
         return Chunk(
             patch_values=np.array(patch_values, dtype=np.float32),
             encoded_tokens=np.concatenate(text_tokens),
             document_tokens=document_tokens,
-            seq_starts=seq_starts,
+            seq_starts=in_bounds_seq_starts,
             max_text_token_id=max_text_token_id,
             patch_size=patch_size,
             max_image_token_id=max_image_token_id,
