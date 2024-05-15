@@ -175,17 +175,28 @@ ConfigStore.instance().store(name="config_schema", node=Config)
 def main(config):
     config = hydra.utils.instantiate(config)
     gen = np.random.Generator(np.random.PCG64(config.seed))
+    output_file = config.output.split(".")[0]
+
+    # for split, mode in [
+    #     (image_flat_tokens.Split.VALIDATION, "w-"),
+    #     (image_flat_tokens.Split.TRAIN, "r+"),
+    # ]:
+    #     dst = image_flat_tokens.Writer(
+    #         config.output, split, mode, config.flat_tokens_config
+    #     )
+    #     examples_chunk = synthetic_task(config, gen)
+    #     print(examples_chunk)
+    #     dst.write(examples_chunk)
 
     for split, mode in [
         (image_flat_tokens.Split.VALIDATION, "w-"),
         (image_flat_tokens.Split.TRAIN, "r+"),
     ]:
-        dst = image_flat_tokens.Writer(
-            config.output, split, mode, config.flat_tokens_config
-        )
+        writer = image_flat_tokens.TFWriter(output_file, split.value)
         examples_chunk = synthetic_task(config, gen)
         print(examples_chunk)
-        dst.write(examples_chunk)
+        writer.write(examples_chunk)
+        writer.close()
 
 
 if __name__ == "__main__":

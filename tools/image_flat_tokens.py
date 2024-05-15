@@ -178,9 +178,6 @@ class Writer:
             executor.submit(lambda: self.document_tokens.append(chunk.document_tokens))
 
 
-import tf_utils
-
-
 class TFWriter:
 
     def __init__(self, filename: str, split: str):
@@ -202,11 +199,11 @@ class TFWriter:
             "seq_starts": tf_utils._bytes_feature(
                 tf.io.serialize_tensor(chunk.seq_starts).numpy()
             ),
-            "max_text_token_id": tf_utils._int64_feature(chunk.max_text_token_id),
+            "max_text_token_id": tf_utils._int64_feature([chunk.max_text_token_id]),
             "patch_size": tf_utils._bytes_feature(
                 tf.io.serialize_tensor(chunk.patch_size).numpy()
             ),
-            "max_image_token_id": tf_utils._int64_feature(chunk.max_image_token_id),
+            "max_image_token_id": tf_utils._int64_feature([chunk.max_image_token_id]),
         }
         example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
         return example_proto.SerializeToString()
