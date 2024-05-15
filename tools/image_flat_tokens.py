@@ -26,20 +26,18 @@ class Chunk:
 
     patch_values: (
         np.ndarray
-    )  # float[num_images patch_size patch_size] - this array keeps track of the image patches.
+    )  # float[num_docs num_images_per_doc num_patches patch_size patch_size] - this array keeps track of the image patches.
     encoded_tokens: (
         np.ndarray
-    )  # uint32[num_tokens] - this array keeps track of the text in the document
+    )  # uint32[num_docs * num_text_tokens_per_doc] - this array keeps track of the text in the document
     document_tokens: (
         np.ndarray
-    )  # uint32[num_tokens] - this array keeps track of which tokens are images and which are text in the document
+    )  # uint32[num_docs * (num_text_tokens_per_doc + num_image_tokens_per_doc)] - this array keeps track of which tokens are images and which are text in the document
     seq_starts: (
         np.ndarray
     )  # uint64[num_seqs] - this array keeps track of the start of each document
     max_text_token_id: int
-    patch_size: tuple[
-        int, int
-    ]  # size of the image patches - this helps to decide the start and end of the image patches
+    patch_size: tuple[int, int]  # size of the image patches
     max_image_token_id: int  # the maximum token id for the image tokens
 
     @staticmethod
@@ -88,8 +86,11 @@ class Writer:
         # Use BITSHUFFLE for encoded_tokens, since the token IDs will typically only be ~14-17 bits wide.
         compressor = Blosc(cname="lz4", clevel=5, shuffle=Blosc.BITSHUFFLE)
 
-        if "max_token_id" not in self.group.attrs:
-            self.group.attrs["max_token_id"] = 0
+        if "max_text_token_id" not in self.group.attrs:
+            self.group.attrs["max_text_token_id"] = 0
+
+        if "max_image_token_id" not in self.group.attrs:
+            self.group.attrs["max_image_token_id"] = 0
 
         if "encoded_tokens" in self.group:
             self.encoded_tokens = self.group["encoded_tokens"]
@@ -116,17 +117,6 @@ class Writer:
                 filters=filters,
             )
 
-        if "patch_values" in self.group:
-            self.patch_values = self.group["patch_values"]
-        else:
-            self.patch_values = self.group.empty(
-                "patch_values",
-                shape=(0,),
-                chunks=(config.image_chunk_size,),
-                dtype=np.float32,
-                compressor=compressor,
-            )
-
         if "document_tokens" in self.group:
             self.document_tokens = self.group["document_tokens"]
         else:
@@ -138,6 +128,8 @@ class Writer:
                 compressor=compressor,
             )
 
+        self.compressor = compressor
+
     def write(self, chunk: Chunk):
         """Synchronously writes a chunk of flat tokens to the underlying storage.
 
@@ -146,11 +138,31 @@ class Writer:
 
         You typically want to call this in a separate thread, to overlap computation with I/O.
         """
+        if "patch_values" not in self.group:
+            # Create patch_values with the initial chunk's shape
+            self.patch_values = self.group.zeros(
+                "patch_values",
+                shape=chunk.patch_values.shape,
+                dtype=np.float32,
+                compressor=self.compressor,
+            )
+            self.patch_values[:] = chunk.patch_values
+        else:
+            self.patch_values = self.group["patch_values"]
+            # Ensure shapes are compatible, resize if necessary
+            if self.patch_values.shape != chunk.patch_values.shape:
+                # Adjusting only the first dimension to append data
+                new_shape = list(self.patch_values.shape)
+                new_shape[0] += chunk.patch_values.shape[0]
+                self.patch_values.resize(new_shape)
+                # Append the new data along the first dimension
+            self.patch_values.append(chunk.patch_values)
+
         num_tokens = self.encoded_tokens.shape[0]
-        if chunk.max_text_token_id > self.group.attrs["max_token_id"]:
-            self.group.attrs["max_token_id"] = chunk.max_text_token_id
-        if chunk.max_image_token_id > self.group.attrs["max_token_id"]:
-            self.group.attrs["max_token_id"] = chunk.max_image_token_id
+        if chunk.max_text_token_id > self.group.attrs["max_text_token_id"]:
+            self.group.attrs["max_text_token_id"] = chunk.max_text_token_id
+        if chunk.max_image_token_id > self.group.attrs["max_image_token_id"]:
+            self.group.attrs["max_image_token_id"] = chunk.max_image_token_id
         if "patch_size" not in self.group.attrs:
             self.group.attrs["patch_size"] = chunk.patch_size
 
@@ -160,5 +172,5 @@ class Writer:
             executor.submit(
                 lambda: self.seq_starts.append(num_tokens + chunk.seq_starts[1:])
             )
-            executor.submit(lambda: self.patch_values.append(chunk.patch_values))
+
             executor.submit(lambda: self.document_tokens.append(chunk.document_tokens))
