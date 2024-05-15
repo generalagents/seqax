@@ -26,10 +26,10 @@ class Chunk:
 
     patch_values: (
         np.ndarray
-    )  # float[num_docs num_images_per_doc num_patches patch_size patch_size] - this array keeps track of the image patches.
+    )  # float[num_docs num_images_per_doc num_patches patch_size patch_size] - this array keeps track of the image patches. -1 indicates no image.
     encoded_tokens: (
         np.ndarray
-    )  # uint32[num_docs * num_text_tokens_per_doc] - this array keeps track of the text in the document
+    )  # uint32[num_docs * num_text_tokens_per_doc] - this array keeps track of the text in the document. TODO: probably redundant, consider removing.
     document_tokens: (
         np.ndarray
     )  # uint32[num_docs * (num_text_tokens_per_doc + num_image_tokens_per_doc)] - this array keeps track of which tokens are images and which are text in the document
