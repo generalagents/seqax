@@ -3,10 +3,10 @@ defaults:
 
 seed: 1
 seq_len: 1024
-examples: 512
+examples: 5
 max_text_token_id: 2048
-image_size: 128
-patch_size: 16
+image_size: 16
+patch_size: 4
 images_per_example: 3
 flat_tokens_config:
   tokens_chunk_size: 4194304
