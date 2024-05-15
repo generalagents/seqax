@@ -32,6 +32,7 @@ class Config:
     image_size: int
     patch_size: int
     images_per_example: int
+    max_patches_per_image: int
     flat_tokens_config: image_flat_tokens.Config
     _target_: str = __name__ + ".Config"
 
@@ -104,16 +105,26 @@ def synthetic_task(config: Config, gen: np.random.Generator) -> image_flat_token
     image_size = (config.image_size, config.image_size)
     patch_size = (config.patch_size, config.patch_size)
     max_text_token_id = config.max_text_token_id
+    max_patches_per_image = config.max_patches_per_image
 
     # init arrays for storing intermediates
-    all_image_patches = []
     all_text_tokens = []
     all_document_tokens = []
 
     # current max_image_token_id
     max_image_token_id = max_text_token_id
+    patches_array = np.zeros(
+        (
+            num_docs,
+            num_images_per_doc,
+            max_patches_per_image,
+            patch_size[0],
+            patch_size[1],
+        )
+    )
+    patches_array.fill(-1)  # fill with -1 to indicate no image
 
-    for docid in range(num_docs):
+    for doc_id in range(num_docs):
         # generate the text tokens
         text_tokens = generate_text_tokens(
             num_text_tokens_per_doc, max_text_token_id, gen
@@ -121,30 +132,33 @@ def synthetic_task(config: Config, gen: np.random.Generator) -> image_flat_token
         all_text_tokens.append(text_tokens)
 
         # generate the images and their patches
-        all_image_patches_per_doc = []
-        for _ in range(num_images_per_doc):
+        num_images_random = np.random.randint(
+            1, num_images_per_doc + 1
+        )  # generate this random number of images for this document
+        for img_id in range(num_images_per_doc):
             image = generate_image(image_size, gen)
             patches = generate_patches(image, patch_size)
-            all_image_patches_per_doc.append(patches)
+            num_patches_to_store = min(max_patches_per_image, patches.shape[0])
 
-        all_image_patches.append(
-            all_image_patches_per_doc
-        )  # (num_docs, num_images_per_doc, num_patches, patch_size[0], patch_size[1])
+            # Store the patches in the preallocated array
+            patches_array[doc_id, img_id, :num_patches_to_store] = patches[
+                :num_patches_to_store
+            ]
 
         # interleave the text and image tokens
         image_tokens = np.arange(
             max_image_token_id,
-            max_image_token_id + len(all_image_patches_per_doc),
+            max_image_token_id + num_images_random,
             dtype=np.uint32,
         )
-        max_image_token_id = max_image_token_id + len(all_image_patches_per_doc)
+        max_image_token_id = max_image_token_id + num_images_random
 
         # interleave to create document tokens
         document_tokens = interleave_tokens(text_tokens, image_tokens, gen)
         all_document_tokens.append(document_tokens)
 
     return image_flat_tokens.Chunk.from_ragged(
-        all_image_patches,
+        patches_array,
         all_text_tokens,
         all_document_tokens,
         max_text_token_id,
