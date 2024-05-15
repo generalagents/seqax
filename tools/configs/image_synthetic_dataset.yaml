@@ -7,7 +7,8 @@ examples: 5
 max_text_token_id: 2048
 image_size: 16
 patch_size: 4
-images_per_example: 3
+max_patches_per_image: 5
+images_per_example: 3  # also acts as max images per example
 flat_tokens_config:
   tokens_chunk_size: 4194304
   seq_starts_chunk_size: 65536
