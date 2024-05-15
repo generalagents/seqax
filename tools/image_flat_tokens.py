@@ -1,10 +1,12 @@
 import concurrent
 import enum
 from dataclasses import dataclass
+import tensorflow as tf
 
 import numpy as np
 import zarr
 from numcodecs import Blosc, Delta
+import tf_utils
 
 
 class Split(enum.Enum):
@@ -174,3 +176,44 @@ class Writer:
             )
 
             executor.submit(lambda: self.document_tokens.append(chunk.document_tokens))
+
+
+import tf_utils
+
+
+class TFWriter:
+
+    def __init__(self, filename: str, split: str):
+        self.filename = f"{filename}_{split}.tfrecord"
+        self.writer = tf.io.TFRecordWriter(self.filename)
+
+    def serialize_example(self, chunk: Chunk):
+
+        feature = {
+            "patch_values": tf_utils._bytes_feature(
+                tf.io.serialize_tensor(chunk.patch_values).numpy()
+            ),
+            "encoded_tokens": tf_utils._bytes_feature(
+                tf.io.serialize_tensor(chunk.encoded_tokens).numpy()
+            ),
+            "document_tokens": tf_utils._bytes_feature(
+                tf.io.serialize_tensor(chunk.document_tokens).numpy()
+            ),
+            "seq_starts": tf_utils._bytes_feature(
+                tf.io.serialize_tensor(chunk.seq_starts).numpy()
+            ),
+            "max_text_token_id": tf_utils._int64_feature(chunk.max_text_token_id),
+            "patch_size": tf_utils._bytes_feature(
+                tf.io.serialize_tensor(chunk.patch_size).numpy()
+            ),
+            "max_image_token_id": tf_utils._int64_feature(chunk.max_image_token_id),
+        }
+        example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+        return example_proto.SerializeToString()
+
+    def write(self, chunk: Chunk):
+
+        self.writer.write(self.serialize_example(chunk))
+
+    def close(self):
+        self.writer.close()
