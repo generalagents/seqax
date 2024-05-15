@@ -65,7 +65,9 @@ def generate_patches(
     Takes an image and returns patches of the image.
     """
     patches = view_as_blocks(image, block_shape=patch_size)
-    patches = patches.reshape(-1, patch_size[0] * patch_size[1])
+    patches = patches.reshape(
+        -1, patch_size[0], patch_size[1]
+    )  # (num_patches, patch_size[0], patch_size[1])
     return patches.astype(np.float32)
 
 
@@ -127,7 +129,7 @@ def synthetic_task(config: Config, gen: np.random.Generator) -> image_flat_token
 
         all_image_patches.append(
             all_image_patches_per_doc
-        )  # (num_docs, num_images_per_doc , patch_size[0], patch_size[1])
+        )  # (num_docs, num_images_per_doc, num_patches, patch_size[0], patch_size[1])
 
         # interleave the text and image tokens
         image_tokens = np.arange(
@@ -169,8 +171,6 @@ def main(config):
         )
         examples_chunk = synthetic_task(config, gen)
         print(examples_chunk)
-        # save to numpy
-        # np.savez(config.output, examples_chunk)
         dst.write(examples_chunk)
 
 
