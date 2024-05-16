@@ -107,8 +107,8 @@ class ZarrImageTextLoader:
                     batch_patches.append(
                         self.patch_values[start_idx + doc_idx, image_local_idx]
                     )
-                    batch_tokens[doc_idx, token_idx] = len(
-                        batch_patches
+                    batch_tokens[doc_idx, token_idx] = (
+                        len(batch_patches) - 1
                     )  # index of the patch in batch_patches
                     image_local_idx += 1
                 else:
