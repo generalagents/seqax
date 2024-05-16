@@ -1,46 +1,11 @@
-"""Input data loading from `flat-tokens` data format.
-
-See `docs/flat-tokens.md` for details on the format.
-
-We support shuffling of the input data, by the following algorithm:
-* there are N independent "streams" of data, each of which has disjoint data and is
-  shuffled independently.
-* within each stream, we fetch a "shuffle buffer" consisting of many "read blocks" of
-  data. We shuffle the entire buffer in memory.
-* the "read blocks" attached to each shuffle buffer are themselves selected randomly.
-
-This is the standard shuffling used by e.g. Huggingface Datasets. Unlike them, we run
-this algorithm _after_ tokenization, so we know exactly at which step number each new
-shuffle buffer starts at, allowing us to do instant resumes after job restarts. In our
-default recommended configuration, we also recommend a much larger shuffle buffer size
-than Huggingface Datasets, which allows for more thorough shuffling, taking advantage
-of the fact that a single sequence of tokens uses very little memory compared to e.g.
-a single image.
-
-Mosaic's StreamingDatasets library uses a similar algorithm as us, which they call py1b: 
-https://docs.mosaicml.com/projects/streaming/en/stable/fundamentals/shuffling.html.
+"""Input data loading from `image-flat-tokens` data format.
 """
 
-from concurrent.futures import ThreadPoolExecutor
-import functools
-from typing import Tuple, Union, Optional
-
-from typeguard import typechecked
-from shardlib.shardtypes import bool_, pytree_dataclass, u32, f32
-import shardlib.shardtypes as shardtypes
-import zarr
 from dataclasses import dataclass
-import jax
-import numpy as np
-from jax.sharding import PartitionSpec as P
-import datetime
-import jax
 
-# imports for hf dataloader
-import numpy as onp
-from transformers import AutoTokenizer
-from torch.utils.data import DataLoader
-from datasets import load_dataset
+import numpy as np
+import zarr
+from shardlib.shardtypes import bool_, f32, pytree_dataclass, u32
 
 
 @dataclass(frozen=True)
@@ -98,9 +63,6 @@ class ZarrImageTextLoader:
         self.document_tokens = self.root[split]["document_tokens"]
         self.max_text_token_id = self.root[split].attrs["max_text_token_id"]
         self.patch_size = tuple(self.root[split].attrs["patch_size"])
-        print("Patch size: ", self.patch_size)
-        print("Patch Values: ", self.patch_values.shape)
-        print("Document Tokens: ", self.document_tokens[:])
         self.num_channels = num_channels
 
         assert len(self.encoded_tokens.shape) == 1, "Expected 1D zarr"
@@ -109,14 +71,11 @@ class ZarrImageTextLoader:
         assert self.seq_starts.dtype == np.uint64, "Expected uint64 zarr"
 
         self.seq_count = self.seq_starts.shape[0] - 1
-        print("Number of sequences: ", self.seq_count)
 
     def load(self, step: int) -> TokenBatch:
         # Calculate the start and end indices for the batch
         start_idx = step * self.token_batch_params.batch
         end_idx = start_idx + self.token_batch_params.batch
-
-        print("Indices requested: ", start_idx, end_idx)
 
         if end_idx > self.seq_count:
             raise IndexError(
@@ -124,57 +83,40 @@ class ZarrImageTextLoader:
             )
 
         # Get the sequence start indices for the batch
-        seq_start_indices = self.seq_starts[start_idx:end_idx]
-        print("Sequence start indices: ", seq_start_indices)
+        seq_start_indices = self.seq_starts[start_idx : end_idx + 1]
 
-        # Prepare the tokens, patches, and indices arrays
-
-        batch_tokens = []
+        # Preallocate the tokens, patches, and indices arrays
+        total_docs = end_idx - start_idx
+        max_seq_len = np.diff(seq_start_indices).max()
+        batch_tokens = np.zeros((total_docs, max_seq_len), dtype=np.uint32)
+        batch_indices = np.zeros((total_docs, max_seq_len), dtype=np.uint32)
         batch_patches = []
-        batch_indices = []
-        batch_image_id = 0
-        for doc_idx in range(start_idx, end_idx):
-            doc_start = self.seq_starts[doc_idx]
-            doc_end = (
-                self.seq_starts[doc_idx + 1]
-                if doc_idx + 1 < len(self.seq_starts)
-                else self.document_tokens.shape[0]
-            )
-            print(doc_idx, doc_start, doc_end)
+
+        # Fill the arrays with data
+        for doc_idx in range(total_docs):
+            doc_start = seq_start_indices[doc_idx]
+            doc_end = seq_start_indices[doc_idx + 1]
 
             doc_tokens = self.document_tokens[doc_start:doc_end]
-            print(doc_tokens)
 
-            doc_images = self.patch_values[
-                doc_idx
-            ]  # [max_num_images_per_doc, num_patches, patch_size, patch_size]
-
-            tokens = []
-            indices = []
-            local_image_id = 0
-            for token in doc_tokens:
+            # Process tokens and patches
+            image_local_idx = 0
+            for token_idx, token in enumerate(doc_tokens):
                 if token >= self.max_text_token_id:
-                    # This is an image - indices will be 1
-                    indices.append(1)
-                    # get the image
-                    image = doc_images[local_image_id]
-                    local_image_id += 1
-
-                    # add image to the batch images
-                    batch_patches.append(image)  # [num_patches, patch_size, patch_size]
-                    batch_image_id += 1
-
-                    # add the image index to the tokens
-                    tokens.append(batch_image_id)
-
+                    batch_indices[doc_idx, token_idx] = 1  # indicates image
+                    batch_patches.append(
+                        self.patch_values[start_idx + doc_idx, image_local_idx]
+                    )
+                    batch_tokens[doc_idx, token_idx] = len(
+                        batch_patches
+                    )  # index of the patch in batch_patches
+                    image_local_idx += 1
                 else:
-                    # This is a text token - indices will be 0
-                    indices.append(0)
-                    # add token as it is
-                    tokens.append(token)
+                    # indicates text (no change to indices as init as 0)
+                    batch_tokens[doc_idx, token_idx] = token
 
-            batch_tokens.append(tokens)
-            batch_indices.append(indices)
+        # Convert patches to a numpy array
+        batch_patches = np.array(batch_patches, dtype=np.float32)
 
         return TokenBatch(
             tokens=batch_tokens, patches=batch_patches, indices=batch_indices
@@ -184,7 +126,7 @@ class ZarrImageTextLoader:
 if __name__ == "__main__":
     # Load the dataset
     params = FlatTokensParams(
-        filespec="synthetic_image_dataset.zarr",
+        filespec="tools/synthetic_image_dataset.zarr",
         seed=0,
         sequence_packing=False,
     )
