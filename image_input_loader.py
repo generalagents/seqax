@@ -123,6 +123,17 @@ class ZarrImageTextLoader:
         )
 
 
+def get_loader(
+    split: str,
+    config: FlatTokensParams,
+    token_batch_params: TokenBatchParams,
+):
+    if isinstance(config, FlatTokensParams):
+        return ZarrImageTextLoader(split, config, token_batch_params)
+    else:
+        raise ValueError(f"Unknown config type {type(config)}")
+
+
 if __name__ == "__main__":
     # Load the dataset
     params = FlatTokensParams(
