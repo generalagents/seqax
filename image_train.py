@@ -75,6 +75,7 @@ class Model:
     w_down: f32["layers d_model/d d_ff/t"]
     final_layer_norm: f32["d_model/d/t"]
     image_proj: f32["patch_h patch_w d_model/d"]
+    image_proj_bias: f32["d_model/d"]
 
     @staticmethod
     @typechecked
@@ -89,6 +90,11 @@ class Model:
         image_proj = jax.random.normal(
             jax_extra.fold_in_str(rng, "image_proj"),
             (h.patch_h, h.patch_w, h.d_model),
+            dtype=jnp.float32,
+        )
+        image_proj_bias = jax.random.normal(
+            jax_extra.fold_in_str(rng, "image_proj_bias"),
+            (h.d_model,),
             dtype=jnp.float32,
         )
 
@@ -152,6 +158,7 @@ class Model:
             w_down=w_down,
             final_layer_norm=final_layer_norm,
             image_proj=image_proj,
+            image_proj_bias=image_proj_bias,
         )
         shardings = make_shardings(Model)
         return jax.tree.map(lax.with_sharding_constraint, arrays, shardings)
