@@ -54,6 +54,15 @@ class ZarrImageTextLoader:
         token_batch_params: TokenBatchParams,
         num_channels: int = 3,
     ):
+        """
+        Initializes the ImageInputLoader object.
+
+        Args:
+            split (str): The split of the dataset to load. Must be either "train" or "validation".
+            params (FlatTokensParams): Parameters for loading the dataset.
+            token_batch_params (TokenBatchParams): Parameters for batching tokens.
+            num_channels (int, optional): The number of channels in the image. Defaults to 3.
+        """
         self.params = params
         self.token_batch_params = token_batch_params
         self.root = zarr.open_group(params.filespec, mode="r")
@@ -75,6 +84,15 @@ class ZarrImageTextLoader:
         self.seq_count = self.seq_starts.shape[0] - 1
 
     def load(self, step: int) -> TokenBatch:
+        """
+        Load a batch of tokens, patches, and indices for a given step.
+
+        Args:
+            step (int): The step number.
+
+        Returns:
+            TokenBatch: An instance of the TokenBatch class containing the loaded tokens, patches, and indices.
+        """
         start_idx = step * self.token_batch_params.batch
         end_idx = start_idx + self.token_batch_params.batch
 
@@ -160,6 +178,21 @@ class ZarrImageTextLoader:
         )
 
     def rasterize_patches_fast(self, image_patches, patch_counter, new_line_token):
+        """
+        Rasterizes the given image patches into a 2D array and returns the rasterized patches, raster tokens, and raster indices.
+
+        Args:
+            image_patches (ndarray): The input image patches to be rasterized. The shape of the array should be (max_num_patches, patch_h, patch_w).
+            patch_counter (int): The starting value for the raster tokens.
+            new_line_token (int): The token value to represent a new line in the rasterized patches.
+
+        Returns:
+            tuple: A tuple containing the rasterized patches, raster tokens, and raster indices.
+                - rasterized_patches (ndarray): The rasterized image patches. The shape of the array is (num_patches, patch_h * patch_w).
+                - raster_tokens (ndarray): The tokens representing the rasterized patches. The shape of the array is (num_patches + num_newlines,).
+                - raster_indices (ndarray): The indices indicating whether a token represents a patch or a new line. The shape of the array is (num_patches + num_newlines,).
+
+        """
         max_num_patches, patch_h, patch_w = image_patches.shape
         rasterized_patches = image_patches.reshape(-1, patch_h * patch_w)
         num_patches = rasterized_patches.shape[0]
