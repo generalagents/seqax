@@ -27,20 +27,22 @@ class FlatTokensParams:
 class TokenBatch:
     """
     A batch of tokens, which are typically the input to training.
-        tokens: u32['batch/d max_token_length']
-    patches: f32['batch/d patch_size patch_size num_channels']
-    indices: u32['batch/d seqlen']
+    Attributes:
+        tokens (np.array): Array of tokens for the batch.
+            Shape: (batch_size, sequence_length)
 
-    indices = 0 1 2 3 4 5 6 7 8 9
-    tokens[0] patches[0] tokens[1] patches[1]
-    [tokens[i // 2] if i % 2 == 0 else patches[i // 2] for i in indices] - in the model
+        patches (np.array): Array of flattened image patches for the batch.
+            Shape: (num_patches, patch_h * patch_w)
+
+        indices (np.array): Array indicating whether each token is an image (1) or text (0).
+            Shape: (batch_size, sequence_length)
     """
 
     tokens: u32["batch/d len"]  # uint32['batch/d max_token_length']
     patches: f32[
-        "batch/d patchsize patchsize numchannels"
-    ]  # float32['batch/d patch_size patch_size num_channels']
-    indices: u32["batch/d len"]  # uint32['batch/d seqlen']
+        "batch/d patch_h*patch_w"
+    ]  # float32['batch/d patch_size*patch_size*num_channels']
+    indices: u32["batch/d len"]  # uint32['batch/d max_token_length']
 
 
 class ZarrImageTextLoader:
@@ -73,7 +75,6 @@ class ZarrImageTextLoader:
         self.seq_count = self.seq_starts.shape[0] - 1
 
     def load(self, step: int) -> TokenBatch:
-        # Calculate the start and end indices for the batch
         start_idx = step * self.token_batch_params.batch
         end_idx = start_idx + self.token_batch_params.batch
 
@@ -82,45 +83,101 @@ class ZarrImageTextLoader:
                 f"Requested step {step} exceeds available data with batch size {self.token_batch_params.batch}."
             )
 
-        # Get the sequence start indices for the batch
-        seq_start_indices = self.seq_starts[start_idx : end_idx + 1]
-
-        # Preallocate the tokens, patches, and indices arrays
-        total_docs = end_idx - start_idx
-        max_seq_len = np.diff(seq_start_indices).max()
-        batch_tokens = np.zeros((total_docs, max_seq_len), dtype=np.uint32)
-        batch_indices = np.zeros((total_docs, max_seq_len), dtype=np.uint32)
+        batch_tokens = []
+        batch_indices = []
         batch_patches = []
 
-        # Fill the arrays with data
-        for doc_idx in range(total_docs):
-            doc_start = seq_start_indices[doc_idx]
-            doc_end = seq_start_indices[doc_idx + 1]
+        patch_counter = 0
+        new_line_token = -1
+
+        for doc_idx in range(start_idx, end_idx):
+            doc_start = self.seq_starts[doc_idx]
+            # print(f"doc_start: {doc_start}")
+            doc_end = (
+                self.seq_starts[doc_idx + 1]
+                if doc_idx + 1 < len(self.seq_starts)
+                else self.document_tokens.shape[0]
+            )
+            # print(f"doc_end: {doc_end}")
 
             doc_tokens = self.document_tokens[doc_start:doc_end]
+            doc_images = self.patch_values[doc_idx]
+            # print("doc tokens:", doc_tokens)
 
-            # Process tokens and patches
-            image_local_idx = 0
-            for token_idx, token in enumerate(doc_tokens):
+            tokens = []
+            indices = []
+            local_image_id = 0
+            for token in doc_tokens:
                 if token >= self.max_text_token_id:
-                    batch_indices[doc_idx, token_idx] = 1  # indicates image
-                    batch_patches.append(
-                        self.patch_values[start_idx + doc_idx, image_local_idx]
+                    # print("\nIMAGE TOKEN")
+                    image_patches = doc_images[local_image_id]
+                    # print(f"image_patches: {image_patches.shape}")
+                    local_image_id += 1
+                    rasterized_patches, raster_tokens, raster_indices = (
+                        self.rasterize_patches_fast(
+                            image_patches, patch_counter, new_line_token
+                        )
                     )
-                    batch_tokens[doc_idx, token_idx] = (
-                        len(batch_patches) - 1
-                    )  # index of the patch in batch_patches
-                    image_local_idx += 1
+                    # print("Rasterized patches: ", rasterized_patches.shape)
+                    # print(rasterized_patches)
+                    # print("===" * 30)
+                    # print(raster_tokens)
+                    # print("\n\n\n")
+                    batch_patches.extend(rasterized_patches)
+                    tokens.extend(raster_tokens)
+                    indices.extend(raster_indices)
+                    patch_counter += len(rasterized_patches)
                 else:
-                    # indicates text (no change to indices as init as 0)
-                    batch_tokens[doc_idx, token_idx] = token
+                    indices.append(0)
+                    tokens.append(token)
 
-        # Convert patches to a numpy array
-        batch_patches = np.array(batch_patches, dtype=np.float32)
+            batch_tokens.append(tokens)
+            batch_indices.append(indices)
 
         return TokenBatch(
             tokens=batch_tokens, patches=batch_patches, indices=batch_indices
         )
+
+    def rasterize_patches(self, image_patches, patch_counter, new_line_token):
+        max_num_patches, patch_h, patch_w = image_patches.shape
+        rasterized_patches = []
+        raster_tokens = []
+        raster_indices = []
+        for i in range(0, max_num_patches, patch_w):
+            for j in range(patch_w):
+                if i + j < max_num_patches:
+                    patch = image_patches[i + j]
+                    rasterized_patches.append(patch.flatten())
+                    raster_tokens.append(patch_counter)
+                    raster_indices.append(1)
+                    patch_counter += 1
+            raster_tokens.append(new_line_token)
+            raster_indices.append(0)
+        return (
+            np.array(rasterized_patches),
+            np.array(raster_tokens),
+            np.array(raster_indices),
+        )
+
+    def rasterize_patches_fast(self, image_patches, patch_counter, new_line_token):
+        max_num_patches, patch_h, patch_w = image_patches.shape
+        rasterized_patches = image_patches.reshape(-1, patch_h * patch_w)
+        num_patches = rasterized_patches.shape[0]
+
+        raster_tokens = np.arange(patch_counter, patch_counter + num_patches)
+        raster_indices = np.ones(num_patches, dtype=int)
+
+        positions = np.arange(patch_w, num_patches, patch_w)
+        newline_positions = positions + np.arange(len(positions))
+
+        raster_tokens = np.insert(raster_tokens, newline_positions, new_line_token)
+        raster_indices = np.insert(raster_indices, newline_positions, 0)
+
+        if raster_tokens[-1] != new_line_token:
+            raster_tokens = np.append(raster_tokens, new_line_token)
+            raster_indices = np.append(raster_indices, 0)
+
+        return rasterized_patches, raster_tokens, raster_indices
 
 
 def get_loader(
