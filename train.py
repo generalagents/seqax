@@ -3,9 +3,9 @@ import operator
 import os
 import time
 
-import env
+import src.seqax.env as env
 env.set_variables()
-import shardlib.shardtypes as shardtypes
+import src.seqax.shardlib.shardtypes as shardtypes
 shardtypes.register_with_typeguard()
 import gcsfs  # Needed for clearml setup
 
@@ -20,15 +20,15 @@ from jax import lax
 from jax.sharding import PartitionSpec
 import jax.numpy as jnp
 import math
-from input_loader import FlatTokensParams, HuggingFaceDataParams, TokenBatch, TokenBatchParams, get_loader
-from shardlib.shardtypes import bf16, bool_, f32, pytree_dataclass, u32, make_shardings
-import shardlib.shardops as shardops
+from src.seqax.input_loader import TokenBatch, TokenBatchParams, get_loader
+from src.seqax.shardlib.shardtypes import bf16, bool_, f32, pytree_dataclass, u32, make_shardings
+import src.seqax.shardlib.shardops as shardops
 P = PartitionSpec
 import einops
-import jax_extra
-from jax_extra import fold_in_str, explicit_activation_checkpointing, save_for_backward
+import src.seqax.jax_extra as jax_extra
+from src.seqax.jax_extra import fold_in_str, explicit_activation_checkpointing, save_for_backward
 import os
-import training_io
+import src.seqax.training_io as training_io
 from clearml import Task
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh
@@ -203,8 +203,8 @@ class Model:
     #   [[0, 1], [0, 3, 4], [0, 6, 7, 8]]
     # which we get by shifting the targets right by 1 and 
     # masking sequence-start tokens to 0.
-    inputs = jnp.pad(batch.targets[:, :-1], pad_width=((0, 0), (1, 0)))
-    is_seq_start: bool_[b'batch/d len'] = batch.is_seq_start
+    inputs = jnp.pad(batch.tokens[:, :-1], pad_width=((0, 0), (1, 0)))
+    is_seq_start: bool_[b'batch/d len'] = batch.is_starts
     inputs: u32[b'batch/d len'] = jnp.where(is_seq_start, 0, inputs)
 
     logits: f32[b'batch/d len V/t'] = self.forward_pass(h, inputs, is_seq_start)
@@ -213,7 +213,7 @@ class Model:
     sum_logits = lax.psum(jnp.sum(jnp.exp(logits), axis=-1, keepdims=True), 't')
     logsumexp = jnp.log(sum_logits)
     logprobs: f32[b'batch/d len V/t'] = logits - logsumexp
-    logprobs_at_targets = shardops.index_unreduced('batch/d len [V/t], batch/d len -> batch/d len', logprobs, batch.targets)
+    logprobs_at_targets = shardops.index_unreduced('batch/d len [V/t], batch/d len -> batch/d len', logprobs, batch.tokens)
     logprobs_at_targets = shardops.psum_scatter('batch/d len -> batch/d len/t', logprobs_at_targets)
     tokens_in_global_batch = logprobs_at_targets.size * jax.lax.psum(1, ('d', 't'))
     return -jnp.sum(logprobs_at_targets) / jnp.float32(tokens_in_global_batch)
@@ -383,16 +383,10 @@ class Config:
   checkpoint_interval: int
   mesh: MeshConfig
   io: training_io.IOConfig
-  flat_tokens: Optional[FlatTokensParams] = None
-  hf_dataset: Optional[HuggingFaceDataParams] = None
-
-  def __post_init__(self):
-    assert self.flat_tokens is not None or self.hf_dataset is not None, 'Must provide either flat_tokens or hf_dataset.'
-    assert not (self.flat_tokens is not None and self.hf_dataset is not None), 'Should not specify both flat_tokens and hf_dataset.'
 
   @cached_property
-  def training_data(self) -> Union[FlatTokensParams, HuggingFaceDataParams]:
-    return self.flat_tokens or self.hf_dataset
+  def training_data(self):
+    return self.dataset
 
 def main_contained(config, logger):
   """Main program, which does not access external services except as specified by config.paths or logger."""
@@ -405,8 +399,7 @@ def main_contained(config, logger):
   with Mesh(mesh_utils.create_device_mesh([config.mesh.d, config.mesh.t], jax.devices()), ('d', 't')):
     root_rng = jax.random.PRNGKey(config.training.seed)
 
-    loader = get_loader('train', config.training_data, config.training.tokens)
-    assert config.model.vocab > loader.max_token_id, f"{config.model.vocab} vs {loader.max_token_id}"
+    loader = get_loader()
     
     model_dir = os.path.join(config.paths.root_working_dir, config.paths.model_name)
     training_io.mkdir(model_dir)
@@ -415,7 +408,10 @@ def main_contained(config, logger):
 
     # Explicitly compile training step, to record XLA HLO graph.
     # See https://bnikolic.co.uk/blog/python/jax/2022/02/22/jax-outputgraph-rev
-    c_training_step = training_step.lower(state, jnp.uint32(0), config.model, config.training, loader.load(0)).compile()
+    print("Loading first batch...")
+    batch = loader.load(0)
+    print("Compiling...")
+    c_training_step = training_step.lower(state, jnp.uint32(0), config.model, config.training, batch).compile()
     date = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     training_io.save_hlo_svg(os.path.join(model_dir, f'training_step_optimized_hlo_{date}.svg'), c_training_step)
 
@@ -441,7 +437,7 @@ def main_contained(config, logger):
         # Print MFU, including (one step of) data loading time.
         print(f"Profile time: {profile_duration}s for 2 steps.")
         model_params = jax.tree.reduce(operator.add, jax.tree.map(lambda w: w.size, state.weights))
-        tokens = loader.load(step).targets.size
+        tokens = loader.load(step).tokens.size
         print(f'Model params: {model_params:_}')
         print(f'Tokens: {tokens:_}')
         device_flops = training_io.get_flops_per_device()

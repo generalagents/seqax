@@ -1,4 +1,4 @@
-import shardlib.shardtypes as shardtypes
+import src.seqax.shardlib.shardtypes as shardtypes
 from jax import lax
 import jax.numpy as jnp
 import jax

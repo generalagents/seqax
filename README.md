@@ -26,7 +26,7 @@ seqax is written in a style that makes the important information visible, rather
 For development and testing you can run on CPU. Typically you'd use our synthetic dataset (which is [checked into this repository](/synthetic_dataset.zarr)) or the [Huggingface data loader](#data-loaders) and you'd set XLA flags to simulate multiple devices so as to test that parallelism is working as intended:
 
 ```
-XLA_FLAGS=--xla_force_host_platform_device_count=8 python -m train --config-name=local_test_synthetic +paths.model_name=synthetic_000
+XLA_FLAGS=--xla_force_host_platform_device_count=8 python -m src.seqax.train --config-name=local_test_synthetic +paths.model_name=synthetic_000
 ```
 
 The `paths.model_name` flag specifies which subdirectory on disk (inside `/tmp`) to write model checkpoints to. You'll typically want to change this when starting a new model run.
